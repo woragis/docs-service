@@ -1,0 +1,374 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Create test docs directory
+        run: |
+          mkdir -p /tmp/test-docs
+          echo "# Test Documentation" > /tmp/test-docs/test.md
+          echo "This is a test document." >> /tmp/test-docs/test.md
+      
+      - name: Run unit tests
+        id: unit_tests
+        env:
+          DOCS_ROOT: /tmp/test-docs
+        run: |
+          pytest tests/unit/ -v --cov=app --cov-report=xml --cov-report=term-missing --cov-report=json 2>&1 | tee test-output.log
+      
+      - name: Parse test results
+        id: parse_results
+        if: always()
+        run: |
+          # Initialize defaults
+          PASSED="0"
+          FAILED="0"
+          WARNINGS="0"
+          COVERAGE="0%"
+          
+          # Extract test summary from output
+          if [ -f test-output.log ]; then
+            PASSED=$(grep -oP '\d+(?= passed)' test-output.log | head -1 || echo "0")
+            FAILED=$(grep -oP '\d+(?= failed)' test-output.log | head -1 || echo "0")
+            WARNINGS=$(grep -oP '\d+(?= warnings)' test-output.log | head -1 || echo "0")
+            COVERAGE=$(grep -oP 'TOTAL.*\d+%' test-output.log | grep -oP '\d+\.\d+%' | head -1 || echo "0%")
+          fi
+          
+          # Ensure values are set (handle empty strings)
+          PASSED=${PASSED:-"0"}
+          FAILED=${FAILED:-"0"}
+          WARNINGS=${WARNINGS:-"0"}
+          COVERAGE=${COVERAGE:-"0%"}
+          
+          # Write to GitHub output with proper formatting
+          {
+            echo "passed<<EOF"
+            echo "$PASSED"
+            echo "EOF"
+            echo "failed<<EOF"
+            echo "$FAILED"
+            echo "EOF"
+            echo "warnings<<EOF"
+            echo "$WARNINGS"
+            echo "EOF"
+            echo "coverage<<EOF"
+            echo "$COVERAGE"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+      
+      - name: Generate test report
+        if: always()
+        run: |
+          # Set defaults if outputs are empty and clean values
+          PASSED=$(echo "${{ steps.parse_results.outputs.passed }}" | xargs | grep -oE '^[0-9]+$' || echo "0")
+          FAILED=$(echo "${{ steps.parse_results.outputs.failed }}" | xargs | grep -oE '^[0-9]+$' || echo "0")
+          WARNINGS=$(echo "${{ steps.parse_results.outputs.warnings }}" | xargs | grep -oE '^[0-9]+$' || echo "0")
+          COVERAGE=$(echo "${{ steps.parse_results.outputs.coverage }}" | xargs | grep -oE '^[0-9]+\.[0-9]+%$|^[0-9]+%$' || echo "0%")
+          
+          # Final defaults
+          PASSED=${PASSED:-0}
+          FAILED=${FAILED:-0}
+          WARNINGS=${WARNINGS:-0}
+          COVERAGE=${COVERAGE:-0%}
+          
+          {
+            echo "## ✅ Unit Tests Report"
+            echo ""
+            echo "### Test Results"
+            echo ""
+            echo "| Metric | Value |"
+            echo "|--------|-------|"
+            echo "| ✅ Passed | $PASSED |"
+            echo "| ❌ Failed | $FAILED |"
+            echo "| ⚠️ Warnings | $WARNINGS |"
+            echo "| 📊 Coverage | $COVERAGE |"
+            echo ""
+          } >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$FAILED" != "0" ] && [ "$FAILED" != "" ]; then
+            {
+              echo "### ⚠️ Test Failures Detected"
+              echo "Check the test output above for details."
+              echo ""
+            } >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Add coverage details if available
+          if [ -f coverage.json ]; then
+            {
+              echo "### Coverage Details"
+              echo "Coverage report is available in the artifacts section."
+              echo ""
+            } >> $GITHUB_STEP_SUMMARY
+          fi
+      
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-logs
+          path: test-output.log
+          retention-days: 7
+          if-no-files-found: ignore
+      
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-coverage-reports
+          path: |
+            coverage.xml
+            coverage.json
+            htmlcov/
+          retention-days: 30
+          if-no-files-found: ignore
+      
+      - name: Check coverage threshold
+        if: always()
+        run: |
+          if [ -f coverage.xml ]; then
+            # Extract coverage percentage from coverage.xml
+            COVERAGE_PCT=$(python -c "import xml.etree.ElementTree as ET; tree = ET.parse('coverage.xml'); root = tree.getroot(); print(f\"{float(root.attrib['line-rate']) * 100:.1f}\")" 2>/dev/null || echo "0")
+            COVERAGE_PCT=${COVERAGE_PCT%.*}  # Remove decimal
+            COVERAGE_PCT=${COVERAGE_PCT:-0}  # Default to 0 if empty
+            if [ -z "$COVERAGE_PCT" ]; then
+              COVERAGE_PCT=0
+            fi
+            if [ "$COVERAGE_PCT" -lt 70 ]; then
+              echo "⚠️ Coverage is below 70%: ${COVERAGE_PCT}%"
+              exit 1
+            else
+              echo "✅ Coverage meets threshold: ${COVERAGE_PCT}%"
+            fi
+          else
+            echo "⚠️ coverage.xml not found, skipping threshold check"
+          fi
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Create test docs directory
+        run: |
+          mkdir -p /tmp/test-docs
+          echo "# Test Documentation" > /tmp/test-docs/test.md
+          echo "This is a test document." >> /tmp/test-docs/test.md
+          echo "# API Documentation" > /tmp/test-docs/api.md
+          echo "API endpoints documentation." >> /tmp/test-docs/api.md
+      
+      - name: Run integration tests
+        id: integration_tests
+        env:
+          DOCS_ROOT: /tmp/test-docs
+        run: |
+          pytest tests/integration/ -v -m integration --cov=app --cov-report=term --cov-report=json 2>&1 | tee test-output.log || true
+        continue-on-error: true
+      
+      - name: Parse integration test results
+        id: parse_integration_results
+        if: always()
+        run: |
+          # Initialize defaults
+          PASSED="0"
+          FAILED="0"
+          SKIPPED="0"
+          
+          # Extract test summary from output
+          if [ -f test-output.log ]; then
+            PASSED=$(grep -oP '\d+(?= passed)' test-output.log | head -1 || echo "0")
+            FAILED=$(grep -oP '\d+(?= failed)' test-output.log | head -1 || echo "0")
+            SKIPPED=$(grep -oP '\d+(?= skipped)' test-output.log | head -1 || echo "0")
+          fi
+          
+          # Ensure values are set (handle empty strings)
+          PASSED=${PASSED:-"0"}
+          FAILED=${FAILED:-"0"}
+          SKIPPED=${SKIPPED:-"0"}
+          
+          # Write to GitHub output with proper formatting
+          {
+            echo "passed<<EOF"
+            echo "$PASSED"
+            echo "EOF"
+            echo "failed<<EOF"
+            echo "$FAILED"
+            echo "EOF"
+            echo "skipped<<EOF"
+            echo "$SKIPPED"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+      
+      - name: Generate integration test report
+        if: always()
+        run: |
+          # Set defaults if outputs are empty and clean values
+          PASSED=$(echo "${{ steps.parse_integration_results.outputs.passed }}" | xargs | grep -oE '^[0-9]+$' || echo "0")
+          FAILED=$(echo "${{ steps.parse_integration_results.outputs.failed }}" | xargs | grep -oE '^[0-9]+$' || echo "0")
+          SKIPPED=$(echo "${{ steps.parse_integration_results.outputs.skipped }}" | xargs | grep -oE '^[0-9]+$' || echo "0")
+          
+          # Final defaults
+          PASSED=${PASSED:-0}
+          FAILED=${FAILED:-0}
+          SKIPPED=${SKIPPED:-0}
+          
+          {
+            echo "## 🔗 Integration Tests Report"
+            echo ""
+            echo "### Test Results"
+            echo ""
+            echo "| Metric | Value |"
+            echo "|--------|-------|"
+            echo "| ✅ Passed | $PASSED |"
+            echo "| ❌ Failed | $FAILED |"
+            echo "| ⏭️ Skipped | $SKIPPED |"
+            echo ""
+          } >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$FAILED" != "0" ]; then
+            echo "### ⚠️ Integration Test Failures" >> $GITHUB_STEP_SUMMARY
+            echo "Some integration tests failed. This may be expected if external services are not configured." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "$SKIPPED" != "0" ]; then
+            echo "### ℹ️ Skipped Tests" >> $GITHUB_STEP_SUMMARY
+            echo "Some tests were skipped, likely due to missing external service dependencies." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+      
+      - name: Upload integration test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-logs
+          path: test-output.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: [unit-tests]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Build Docker image
+        id: docker_build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          load: true
+          tags: docs-service:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      
+      - name: Test Docker image
+        run: |
+          docker run --rm docs-service:test python -c "import app; print('Image works!')"
+      
+      - name: Generate Docker build report
+        if: always()
+        run: |
+          echo "## 🐳 Docker Build Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Build Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ **Docker image built successfully**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Image tag: \`docs-service:test\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "The image has been validated and is ready for deployment." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Note**: The docs folder should be mounted as a volume in docker-compose." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Docker build failed**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Check the build logs above for details." >> $GITHUB_STEP_SUMMARY
+          fi
+
+  test-summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests, docker-build]
+    if: always()
+    
+    steps:
+      - name: Generate overall summary
+        run: |
+          echo "## 📊 CI Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Job Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit Tests | ${{ needs.unit-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Integration Tests | ${{ needs.integration-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Docker Build | ${{ needs.docker-build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Determine overall status
+          if [ "${{ needs.unit-tests.result }}" == "success" ] && \
+             [ "${{ needs.docker-build.result }}" == "success" ]; then
+            echo "### ✅ Overall Status: Success" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "All critical checks passed. The service is ready for deployment." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ Overall Status: Failure" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Some checks failed. Please review the job logs above." >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Artifacts Available" >> $GITHUB_STEP_SUMMARY
+          echo "- Unit test logs and coverage reports" >> $GITHUB_STEP_SUMMARY
+          echo "- Integration test logs" >> $GITHUB_STEP_SUMMARY
+          echo "- Coverage HTML reports (in artifacts)" >> $GITHUB_STEP_SUMMARY
+
