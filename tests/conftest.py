@@ -45,11 +45,29 @@ def temp_docs_dir():
 @pytest.fixture
 def mock_docs_root(monkeypatch, temp_docs_dir):
     """Mock DOCS_ROOT to point to temp directory."""
-    monkeypatch.setenv("DOCS_ROOT", str(temp_docs_dir))
-    # Reload config
+    # Patch the settings object directly since it's a frozen dataclass
     from app import config
-    import importlib
-    importlib.reload(config)
+    from dataclasses import replace
+    
+    # Create a new settings object with updated DOCS_ROOT
+    original_settings = config.settings
+    new_settings = replace(original_settings, DOCS_ROOT=str(temp_docs_dir))
+    
+    # Patch the settings in all modules that use it
+    monkeypatch.setattr(config, "settings", new_settings)
+    
+    # Patch in routes/docs.py
+    from app.routes import docs
+    monkeypatch.setattr(docs, "settings", new_settings)
+    
+    # Patch in health.py
+    from app import health
+    monkeypatch.setattr(health, "settings", new_settings)
+    
+    # Patch in main.py
+    from app import main
+    monkeypatch.setattr(main, "settings", new_settings)
+    
     yield temp_docs_dir
 
 

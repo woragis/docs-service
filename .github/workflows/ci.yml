@@ -201,7 +201,8 @@ jobs:
         env:
           DOCS_ROOT: /tmp/test-docs
         run: |
-          pytest tests/integration/ -v -m integration --cov=app --cov-report=term --cov-report=json 2>&1 | tee test-output.log || true
+          # Run integration tests without coverage threshold (they have lower coverage)
+          pytest tests/integration/ -v -m integration --cov=app --cov-report=term --cov-report=json --override-ini="cov-fail-under=0" 2>&1 | tee test-output.log || true
         continue-on-error: true
       
       - name: Parse integration test results

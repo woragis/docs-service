@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+@pytest.mark.integration
 class TestDocsAPIIntegration:
     """Integration tests for docs API."""
     
