@@ -6,7 +6,18 @@ import os
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from app.health import check_health
+from app.health import check_health, _health_cache, _cache_timestamp
+
+
+@pytest.fixture(autouse=True)
+def clear_health_cache():
+    """Clear health check cache before each test."""
+    _health_cache.set({})
+    _cache_timestamp.set(0.0)
+    yield
+    # Cleanup after test
+    _health_cache.set({})
+    _cache_timestamp.set(0.0)
 
 
 class TestHealthCheck:
@@ -35,7 +46,8 @@ class TestHealthCheck:
     
     def test_health_check_docs_directory_missing(self):
         """Test health check when docs directory doesn't exist."""
-        with patch('app.health.Path') as mock_path:
+        with patch('app.health.Path') as mock_path, \
+             patch('app.health.time.time', return_value=10.0):  # Make cache appear expired
             mock_docs_path = MagicMock()
             mock_docs_path.exists.return_value = False
             mock_path.return_value = mock_docs_path
@@ -48,7 +60,8 @@ class TestHealthCheck:
     
     def test_health_check_docs_directory_not_readable(self):
         """Test health check when docs directory is not readable."""
-        with patch('app.health.Path') as mock_path:
+        with patch('app.health.Path') as mock_path, \
+             patch('app.health.time.time', return_value=10.0):  # Make cache appear expired
             mock_docs_path = MagicMock()
             mock_docs_path.exists.return_value = True
             mock_docs_path.rglob.return_value = []
@@ -63,14 +76,16 @@ class TestHealthCheck:
     
     def test_health_check_counts_markdown_files(self):
         """Test health check counts markdown files."""
-        with patch('app.health.Path') as mock_path:
+        with patch('app.health.Path') as mock_path, \
+             patch('app.health.time.time', return_value=10.0):  # Make cache appear expired
             mock_docs_path = MagicMock()
             mock_docs_path.exists.return_value = True
             
-            # Mock markdown files
+            # Mock markdown files - need to handle both .md and .markdown patterns
             mock_file1 = MagicMock()
             mock_file2 = MagicMock()
-            mock_docs_path.rglob.return_value = [mock_file1, mock_file2]
+            # rglob is called twice (once for *.md, once for *.markdown)
+            mock_docs_path.rglob.side_effect = [[mock_file1, mock_file2], []]
             mock_path.return_value = mock_docs_path
             
             with patch('os.access', return_value=True):

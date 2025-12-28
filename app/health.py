@@ -68,13 +68,15 @@ def check_health() -> Dict[str, Any]:
             md_files = list(docs_path.rglob("*.md")) + list(docs_path.rglob("*.markdown"))
             checks.append({
                 "name": "markdown_files",
-                "status": "ok"
+                "status": "ok",
+                "count": str(len(md_files))
             })
         except Exception:
             # If we can't count files, it's not critical but log it
             checks.append({
                 "name": "markdown_files",
-                "status": "error"
+                "status": "error",
+                "count": "0"
             })
     
     result = {
